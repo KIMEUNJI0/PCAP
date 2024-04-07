@@ -1,0 +1,175 @@
+#include <pcap.h>
+
+#include <stdbool.h>
+
+#include <stdio.h>
+
+#include <netinet/in.h>
+
+#include <arpa/inet.h>
+
+#include <net/ethernet.h>
+
+#include <netinet/ip.h>
+
+#include <netinet/tcp.h>
+
+
+
+void usage() {
+
+    printf("syntax: pcap-test <interface>\n");
+
+    printf("sample: pcap-test wlan0\n");
+
+}
+
+
+
+typedef struct {
+
+    char* dev_;
+
+} Param;
+
+
+
+Param param = {.dev_ = NULL};
+
+
+
+bool parse(Param* param, int argc, char* argv[]) {
+
+    if (argc != 2) {
+
+        usage();
+
+        return false;
+
+    }
+
+    param->dev_ = argv[1];
+
+    return true;
+
+}
+
+
+
+int main(int argc, char* argv[]) {
+
+    if (!parse(&param, argc, argv))
+
+        return -1;
+
+
+
+    char errbuf[PCAP_ERRBUF_SIZE];
+
+    pcap_t* pcap = pcap_open_live(param.dev_, BUFSIZ, 1, 1000, errbuf);
+
+    if (pcap == NULL) {
+
+        fprintf(stderr, "pcap_open_live(%s) return null - %s\n", param.dev_, errbuf);
+
+        return -1;
+
+    }
+
+
+
+    while (true) {
+
+        struct pcap_pkthdr* header;
+
+        const u_char* packet;
+
+        int res = pcap_next_ex(pcap, &header, &packet);
+
+        if (res == 0) continue;
+
+        if (res == PCAP_ERROR || res == PCAP_ERROR_BREAK) {
+
+            printf("pcap_next_ex return %d(%s)\n", res, pcap_geterr(pcap));
+
+            break;
+
+        }
+
+
+
+        const struct ether_header* eth_header = (struct ether_header*)packet;
+
+        if (ntohs(eth_header->ether_type) != ETHERTYPE_IP) continue; // Check if it is IP packet
+
+
+
+        const struct ip* ip_header = (struct ip*)(packet + sizeof(struct ether_header));
+
+        if (ip_header->ip_p != IPPROTO_TCP) continue; // Check if it is TCP packet
+
+
+
+        int ip_header_len = ip_header->ip_hl * 4;
+
+        const struct tcphdr* tcp_header = (struct tcphdr*)((const char*)ip_header + ip_header_len);
+
+
+
+        int tcp_header_len = tcp_header->th_off * 4;
+
+
+
+        printf("Src MAC: %.2x:%.2x:%.2x:%.2x:%.2x:%.2x, ",
+
+               eth_header->ether_shost[0], eth_header->ether_shost[1], eth_header->ether_shost[2],
+
+               eth_header->ether_shost[3], eth_header->ether_shost[4], eth_header->ether_shost[5]);
+
+        printf("Dst MAC: %.2x:%.2x:%.2x:%.2x:%.2x:%.2x\n",
+
+               eth_header->ether_dhost[0], eth_header->ether_dhost[1], eth_header->ether_dhost[2],
+
+               eth_header->ether_dhost[3], eth_header->ether_dhost[4], eth_header->ether_dhost[5]);
+
+
+
+        printf("Src IP: %s, ", inet_ntoa(ip_header->ip_src));
+
+        printf("Dst IP: %s\n", inet_ntoa(ip_header->ip_dst));
+
+
+
+        printf("Src port: %d, ", ntohs(tcp_header->th_sport));
+
+        printf("Dst port: %d\n", ntohs(tcp_header->th_dport));
+
+
+
+        const char* payload = (const char*)tcp_header + tcp_header_len;
+
+        int size_payload = ntohs(ip_header->ip_len) - (ip_header_len + tcp_header_len);
+
+
+
+        printf("Payload (%d bytes): ", size_payload);
+
+        for(int i = 0; i < size_payload; ++i) {
+
+            printf("%02x ", (unsigned char)payload[i]);
+
+            if (i == 15) break; // Only print first 16 bytes of payload
+
+        }
+
+        printf("\n\n");
+
+    }
+
+
+
+    pcap_close(pcap);
+
+    return 0;
+
+}
